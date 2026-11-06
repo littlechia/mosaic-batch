@@ -14,7 +14,7 @@
 
 ## 用起来
 
-线上版在 <https://YOUR-USER.github.io/mosaic-batch/>，Chrome 或 Edge 打开就能用，不用装东西。
+线上版在 <https://littlechia.github.io/mosaic-batch/>，Chrome 或 Edge 打开就能用，不用装东西。
 
 第一次点「选择文件夹」时浏览器会问一次能不能读写这个目录，允许之后整个文件夹都能原地写回。
 
