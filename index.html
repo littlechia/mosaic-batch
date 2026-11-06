@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>批量打码 · 逐张选区 · 存回原图</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161a21; --line:#242a35; --text:#e7eaf0; --dim:#8b94a6;
+    --acc:#22d3ee; --todo:#4a5468; --done:#f59e0b; --saved:#22c55e; --warn:#f97316;
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none !important}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text); display:flex; flex-direction:column;
+    font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+    overflow:hidden; -webkit-font-smoothing:antialiased;
+  }
+  header{
+    display:flex; align-items:center; gap:7px; flex-wrap:wrap;
+    padding:8px 12px; background:var(--panel); border-bottom:1px solid var(--line);
+  }
+  button,label.btn{
+    appearance:none; border:1px solid var(--line); background:#1d232c; color:var(--text);
+    padding:6px 11px; border-radius:7px; cursor:pointer; font-size:13px; line-height:1;
+    transition:.14s; font-family:inherit; white-space:nowrap;
+  }
+  button:hover,label.btn:hover{background:#243041; border-color:#33445c}
+  button.on{background:var(--acc); color:#06222a; border-color:var(--acc); font-weight:600}
+  button:disabled{opacity:.3; cursor:not-allowed}
+  button.primary{background:#0f766e; border-color:#0d9488; color:#d1fae5}
+  button.primary:hover{background:#0d9488}
+  .sep{width:1px; height:20px; background:var(--line); margin:0 3px}
+  .grow{flex:1}
+  .field{display:flex; align-items:center; gap:6px; color:var(--dim)}
+  input[type=range]{width:96px; accent-color:var(--acc)}
+  input[type=color]{width:30px;height:26px;padding:0;border:1px solid var(--line);background:#1d232c;border-radius:6px;cursor:pointer}
+  #counter{color:var(--dim); font-variant-numeric:tabular-nums; min-width:64px; text-align:center}
+
+  main{flex:1; display:flex; min-height:0}
+  #queue{
+    width:206px; flex:0 0 206px; overflow-y:auto; border-right:1px solid var(--line);
+    background:#12161c; padding:6px;
+  }
+  #queue:empty::after{
+    content:"还没有图片"; display:block; color:#4c5566; font-size:12px; text-align:center; padding:24px 0;
+  }
+  .qi{
+    display:flex; align-items:center; gap:8px; padding:5px 6px; border-radius:6px;
+    cursor:pointer; border:1px solid transparent; margin-bottom:2px;
+  }
+  .qi:hover{background:#1a2029}
+  .qi.active{background:#1b2a33; border-color:#2c4c5a}
+  .qi img{width:34px; height:26px; object-fit:cover; border-radius:4px; background:#000; flex:0 0 34px}
+  .qi .nm{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:#c8ced9}
+  .qi .dot{width:8px;height:8px;border-radius:50%;background:var(--todo);flex:0 0 8px}
+  .qi[data-st="done"] .dot{background:var(--done)}
+  .qi[data-st="saved"] .dot{background:var(--saved)}
+
+  #stage{
+    flex:1; min-width:0; display:flex; align-items:center; justify-content:center;
+    padding:16px; overflow:auto; position:relative;
+  }
+  #wrap{position:relative; flex:0 0 auto; line-height:0; border-radius:5px; overflow:hidden; box-shadow:0 10px 40px rgba(0,0,0,.55)}
+  #base{display:block; width:auto; height:auto; max-width:calc(100vw - 280px); max-height:calc(100vh - 180px); background:#000}
+  #over{position:absolute; inset:0; width:100%; height:100%; touch-action:none; cursor:crosshair}
+  #empty{
+    text-align:center; color:var(--dim); border:2px dashed #2b3340; border-radius:14px;
+    padding:44px 38px; max-width:560px;
+  }
+  #empty h1{font-size:17px; color:var(--text); margin:0 0 10px; font-weight:600}
+  #empty p{margin:5px 0; font-size:13px}
+  kbd{background:#232a35; border:1px solid #313a49; border-bottom-width:2px; border-radius:5px; padding:1px 5px; font-size:11px}
+  #toast{
+    position:fixed; left:50%; bottom:44px; transform:translate(-50%,20px); opacity:0;
+    background:#0b3b46; color:#a5f3fc; border:1px solid #155e75; padding:8px 16px;
+    border-radius:8px; transition:.25s; pointer-events:none; font-size:13px; max-width:70vw;
+  }
+  #toast.show{opacity:1; transform:translate(-50%,0)}
+  #banner{
+    background:#3b1d0d; color:#fdba74; border-bottom:1px solid #7c2d12; padding:6px 12px; font-size:12px;
+  }
+  #banner b{color:#fdba74}
+  .tag{color:var(--warn)}
+  #keys{
+    padding:5px 12px; background:var(--panel); border-top:1px solid var(--line);
+    color:#79839a; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #keys b{
+    color:#c3cbd9; font-weight:600; background:#232a35; border:1px solid #2f3846;
+    border-radius:4px; padding:0 5px; margin:0 1px;
+  }
+  #keys .gap{color:#3b4354; margin:0 5px}
+</style>
+</head>
+<body>
+
+<div id="banner" hidden></div>
+
+<header>
+  <button id="pickDir">选择文件夹</button>
+  <button id="pickFiles">选择图片</button>
+  <div class="sep"></div>
+  <button data-mode="mosaic" class="on">马赛克</button>
+  <button data-mode="blur">模糊</button>
+  <button data-mode="fill">纯色块</button>
+  <span class="field" id="pxBox">强度 <input id="px" type="range" min="4" max="64" value="16" /><span id="pxVal">16</span></span>
+  <span class="field" id="blurBox" hidden>半径 <input id="blur" type="range" min="4" max="60" value="20" /><span id="blurVal">20</span></span>
+  <span class="field" id="colorBox" hidden><input id="color" type="color" value="#000000" /></span>
+  <div class="sep"></div>
+  <button id="undo" disabled>撤销</button>
+  <button id="reset" disabled>还原此张</button>
+  <button id="applyLast" disabled title="把上一张的选区套到这一张（D）">套用上次</button>
+  <div class="grow"></div>
+  <span id="counter">0 / 0</span>
+  <button id="prev">上一张</button>
+  <button id="next">下一张</button>
+  <button id="save" class="primary" disabled>保存并下一张</button>
+  <button id="saveAll" disabled>全部保存</button>
+</header>
+
+<main>
+  <aside id="queue"></aside>
+  <section id="stage">
+    <div id="empty">
+      <h1>批量打码：选文件夹 → 逐张框选 → 存回原图</h1>
+      <p>点「选择文件夹」可<b>直接覆盖原文件</b>（不另存副本）</p>
+      <p>也可以把一批图片拖进来，或用 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴单张</p>
+      <p>拖框打完 → <kbd>Enter</kbd> 保存并跳到下一张 · <kbd>D</kbd> 套用上一张的选区 · <kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销</p>
+    </div>
+    <div id="wrap" hidden>
+      <canvas id="base"></canvas>
+      <canvas id="over"></canvas>
+    </div>
+  </section>
+</main>
+
+<div id="keys">
+  <b>Enter</b> 保存并下一张<span class="gap">|</span><b>→</b><b>N</b><b>空格</b> 下一张<span class="gap">|</span><b>←</b><b>P</b> 上一张<span class="gap">|</span><b>D</b> 套用上次选区<span class="gap">|</span><b>Ctrl</b>+<b>Z</b> 撤销<span class="gap">|</span><b>R</b> 还原这张<span class="gap">|</span><b>Ctrl</b>+<b>Shift</b>+<b>S</b> 全部保存
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (s) { return document.querySelector(s); };
+
+  var base = $('#base'), over = $('#over');
+  var bx = base.getContext('2d');
+  var ox = over.getContext('2d');
+  var wrap = $('#wrap'), empty = $('#empty');
+  var queueEl = $('#queue');
+  var counter = $('#counter');
+  var toastEl = $('#toast');
+  var pxR = $('#px'), pxV = $('#pxVal');
+  var blurR = $('#blur'), blurV = $('#blurVal');
+  var colorI = $('#color');
+  var btnUndo = $('#undo'), btnReset = $('#reset'), btnSave = $('#save');
+  var btnSaveAll = $('#saveAll'), btnLast = $('#applyLast');
+  var btnPrev = $('#prev'), btnNext = $('#next');
+
+  var S = {
+    items: [],
+    cur: -1,
+    mode: 'mosaic',
+    lastOp: null,
+    drag: null,
+    busy: false
+  };
+
+  var IMG_RE = /\.(png|jpe?g|webp|bmp|gif|avif)$/i;
+
+  /* ================= 基础工具 ================= */
+  function cur() { return S.items[S.cur] || null; }
+
+  var toastTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 2200);
+  }
+
+  function updateHeader() {
+    var it = cur();
+    var has = !!it;
+    btnSave.disabled = !has;
+    btnReset.disabled = !has || !it.ops.length;
+    btnUndo.disabled = !has || !it.ops.length;
+    btnLast.disabled = !has || !S.lastOp;
+    btnPrev.disabled = !has;
+    btnNext.disabled = !has;
+    var dirty = S.items.filter(function (x) { return x.status === 'done'; }).length;
+    btnSaveAll.disabled = dirty === 0;
+    btnSaveAll.textContent = dirty ? ('全部保存 (' + dirty + ')') : '全部保存';
+    counter.textContent = has ? ((S.cur + 1) + ' / ' + S.items.length) : '0 / 0';
+  }
+
+  /* ================= 载入 ================= */
+  async function readFileOf(item) {
+    if (!item.file && item.handle) {
+      try { item.file = await item.handle.getFile(); } catch (e) { item.file = null; }
+    }
+    return item.file;
+  }
+
+  async function loadSrc(item) {
+    if (item.src) return item.src;
+    var f = await readFileOf(item);
+    if (!f) throw new Error('读不到文件: ' + item.name);
+    item.type = f.type || mimeOf(item.name);
+    var bmp;
+    try {
+      bmp = await createImageBitmap(f, { imageOrientation: 'from-image' });
+    } catch (e) {
+      bmp = await createImageBitmap(f);
+    }
+    item.src = bmp;
+    item.w = bmp.width;
+    item.h = bmp.height;
+    return bmp;
+  }
+
+  function mimeOf(name) {
+    var m = /\.([a-z0-9]+)$/i.exec(name);
+    var ext = m ? m[1].toLowerCase() : '';
+    if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+    if (ext === 'webp') return 'image/webp';
+    if (ext === 'gif') return 'image/gif';
+    if (ext === 'bmp') return 'image/bmp';
+    return 'image/png';
+  }
+
+  async function makeThumb(item) {
+    if (item.thumbUrl) return;
+    try {
+      var f = await readFileOf(item);
+      if (f) item.thumbUrl = URL.createObjectURL(f);
+    } catch (e) {}
+  }
+
+  function renderQueue() {
+    queueEl.innerHTML = '';
+    S.items.forEach(function (it, i) {
+      var d = document.createElement('div');
+      d.className = 'qi' + (i === S.cur ? ' active' : '');
+      d.dataset.i = i;
+      d.dataset.st = it.status;
+      var img = document.createElement('img');
+      if (it.thumbUrl) img.src = it.thumbUrl;
+      var nm = document.createElement('div');
+      nm.className = 'nm';
+      nm.textContent = it.name;
+      nm.title = it.name;
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      d.appendChild(img); d.appendChild(nm); d.appendChild(dot);
+      d.addEventListener('click', function () { openItem(i); });
+      queueEl.appendChild(d);
+      if (!it.thumbUrl) {
+        makeThumb(it).then(function () {
+          if (it.thumbUrl && d.isConnected) img.src = it.thumbUrl;
+        });
+      }
+    });
+  }
+
+  function markActive() {
+    var nodes = queueEl.children;
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].classList.toggle('active', Number(nodes[i].dataset.i) === S.cur);
+    }
+    var node = queueEl.children[S.cur];
+    if (node) {
+      node.dataset.st = cur().status;
+      node.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function setStatus(item, st) {
+    item.status = st;
+    var node = queueEl.children[S.items.indexOf(item)];
+    if (node) node.dataset.st = st;
+    updateHeader();
+  }
+
+  /* ================= 绘制 ================= */
+  function paint(ctx, it, op) {
+    var x = op.x, y = op.y, w = op.w, h = op.h;
+    if (w < 1 || h < 1) return;
+    if (op.mode === 'mosaic') {
+      var tw = Math.max(1, Math.round(w / op.size));
+      var th = Math.max(1, Math.round(h / op.size));
+      var t = document.createElement('canvas');
+      t.width = tw; t.height = th;
+      var tc = t.getContext('2d');
+      tc.imageSmoothingEnabled = true;
+      tc.imageSmoothingQuality = 'high';
+      tc.drawImage(ctx.canvas, x, y, w, h, 0, 0, tw, th);
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(t, 0, 0, tw, th, x, y, w, h);
+      ctx.restore();
+    } else if (op.mode === 'blur') {
+      var snap = document.createElement('canvas');
+      snap.width = ctx.canvas.width;
+      snap.height = ctx.canvas.height;
+      snap.getContext('2d').drawImage(ctx.canvas, 0, 0);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.clip();
+      ctx.filter = 'blur(' + op.size + 'px)';
+      ctx.drawImage(snap, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.fillStyle = op.color || '#000';
+      ctx.fillRect(x, y, w, h);
+      ctx.restore();
+    }
+  }
+
+  function render() {
+    var it = cur();
+    if (!it || !it.src) return;
+    if (base.width !== it.w || base.height !== it.h) {
+      base.width = it.w; base.height = it.h;
+      over.width = it.w; over.height = it.h;
+    }
+    bx.setTransform(1, 0, 0, 1, 0, 0);
+    bx.clearRect(0, 0, it.w, it.h);
+    bx.imageSmoothingEnabled = true;
+    bx.drawImage(it.src, 0, 0);
+    for (var i = 0; i < it.ops.length; i++) paint(bx, it, it.ops[i]);
+    ox.clearRect(0, 0, over.width, over.height);
+  }
+
+  async function openItem(i) {
+    if (i < 0 || i >= S.items.length) return;
+    S.cur = i;
+    var it = S.items[i];
+    empty.hidden = true;
+    wrap.hidden = false;
+    if (!it.src) {
+      try { await loadSrc(it); } catch (e) { toast('读取失败: ' + it.name); return; }
+    }
+    render();
+    markActive();
+    updateHeader();
+  }
+
+  /* ================= 交互 ================= */
+  function toCanvas(e) {
+    var r = over.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * (over.width / r.width),
+      y: (e.clientY - r.top) * (over.height / r.height)
+    };
+  }
+
+  function drawSel() {
+    ox.clearRect(0, 0, over.width, over.height);
+    if (!S.drag) return;
+    var d = S.drag;
+    var x = Math.min(d.x0, d.x1), y = Math.min(d.y0, d.y1);
+    var w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
+    var lw = Math.max(1.4, over.width / 700);
+    ox.save();
+    ox.fillStyle = 'rgba(34,211,238,.14)';
+    ox.fillRect(x, y, w, h);
+    ox.strokeStyle = '#22d3ee';
+    ox.lineWidth = lw;
+    ox.setLineDash([8 * lw, 6 * lw]);
+    ox.strokeRect(x, y, w, h);
+    ox.restore();
+  }
+
+  over.addEventListener('pointerdown', function (e) {
+    if (!cur() || !cur().src) return;
+    e.preventDefault();
+    if (over.setPointerCapture) over.setPointerCapture(e.pointerId);
+    var p = toCanvas(e);
+    S.drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    drawSel();
+  });
+  over.addEventListener('pointermove', function (e) {
+    if (!S.drag) return;
+    var p = toCanvas(e);
+    S.drag.x1 = p.x; S.drag.y1 = p.y;
+    drawSel();
+  });
+  over.addEventListener('pointerup', function (e) {
+    if (!S.drag) return;
+    var p = toCanvas(e);
+    S.drag.x1 = p.x; S.drag.y1 = p.y;
+    var d = S.drag;
+    S.drag = null;
+    var x = Math.round(Math.min(d.x0, d.x1)), y = Math.round(Math.min(d.y0, d.y1));
+    var w = Math.round(Math.abs(d.x1 - d.x0)), h = Math.round(Math.abs(d.y1 - d.y0));
+    if (w >= 3 && h >= 3) applyOp({ x: x, y: y, w: w, h: h });
+    else { ox.clearRect(0, 0, over.width, over.height); }
+  });
+  over.addEventListener('pointercancel', function () {
+    S.drag = null;
+    ox.clearRect(0, 0, over.width, over.height);
+  });
+
+  function makeOp(rect) {
+    var it = cur();
+    if (!it) return null;
+    var op = { x: rect.x, y: rect.y, w: rect.w, h: rect.h, mode: S.mode };
+    if (S.mode === 'mosaic') op.size = +pxR.value;
+    else if (S.mode === 'blur') op.size = +blurR.value;
+    else op.color = colorI.value;
+    op.iw = it.w; op.ih = it.h;
+    return op;
+  }
+
+  function applyOp(rect) {
+    var it = cur();
+    if (!it) return;
+    var op = makeOp(rect);
+    if (!op) return;
+    it.ops.push(op);
+    S.lastOp = op;
+    paint(bx, it, op);
+    ox.clearRect(0, 0, over.width, over.height);
+    setStatus(it, 'done');
+    btnUndo.disabled = false;
+    btnReset.disabled = false;
+    btnLast.disabled = false;
+  }
+
+  /* ================= 保存 ================= */
+  function toBlobOf(it) {
+    return new Promise(function (resolve) {
+      var c = document.createElement('canvas');
+      c.width = it.w; c.height = it.h;
+      var ctx = c.getContext('2d');
+      ctx.drawImage(it.src, 0, 0);
+      for (var i = 0; i < it.ops.length; i++) paint(ctx, it, it.ops[i]);
+      var type = it.type || 'image/png';
+      var ok = /^image\/(jpeg|png|webp)$/.test(type);
+      c.toBlob(function (b) { resolve(b); }, ok ? type : 'image/png', 0.95);
+    });
+  }
+
+  function download(blob, name) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 6000);
+  }
+
+  async function saveItem(item, opts) {
+    opts = opts || {};
+    if (!item.ops.length) return false;
+    var blob = await toBlobOf(item);
+    if (!blob) return false;
+    if (item.handle && item.handle.createWritable) {
+      try {
+        var perm = item.handle.queryPermission ? await item.handle.queryPermission({ mode: 'readwrite' }) : 'granted';
+        if (perm !== 'granted' && item.handle.requestPermission) {
+          perm = await item.handle.requestPermission({ mode: 'readwrite' });
+        }
+        if (perm !== 'granted') throw new Error('permission');
+        var w = await item.handle.createWritable();
+        await w.write(blob);
+        await w.close();
+        setStatus(item, 'saved');
+        if (!opts.silent) toast('已覆盖原文件：' + item.name);
+        return true;
+      } catch (e) {
+        download(blob, item.name);
+        setStatus(item, 'saved');
+        if (!opts.silent) toast('无法写回原文件，已改为下载：' + item.name);
+        return false;
+      }
+    }
+    download(blob, item.name);
+    setStatus(item, 'saved');
+    if (!opts.silent) toast('已下载：' + item.name);
+    return false;
+  }
+
+  function nextTodo(from) {
+    for (var i = from + 1; i < S.items.length; i++) if (S.items[i].status !== 'saved') return i;
+    for (var j = 0; j < from; j++) if (S.items[j].status !== 'saved') return j;
+    return -1;
+  }
+
+  async function saveAndNext() {
+    var it = cur();
+    if (!it) return;
+    if (!it.ops.length) { toast('这张还没打码'); return; }
+    if (S.busy) return;
+    S.busy = true;
+    try {
+      await saveItem(it);
+      var n = nextTodo(S.cur);
+      if (n >= 0) await openItem(n);
+      else toast('全部处理完了 🎉');
+    } finally {
+      S.busy = false;
+      updateHeader();
+    }
+  }
+
+  btnSave.addEventListener('click', saveAndNext);
+
+  btnSaveAll.addEventListener('click', async function () {
+    var todo = S.items.filter(function (x) { return x.status === 'done'; });
+    if (!todo.length) return;
+    S.busy = true;
+    var ok = 0;
+    for (var i = 0; i < todo.length; i++) {
+      try { await saveItem(todo[i], { silent: true }); ok++; } catch (e) {}
+    }
+    S.busy = false;
+    updateHeader();
+    toast('已保存 ' + ok + ' 张');
+  });
+
+  /* ================= 按钮 ================= */
+  document.querySelectorAll('[data-mode]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('[data-mode]').forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on');
+      S.mode = b.dataset.mode;
+      $('#pxBox').hidden = S.mode !== 'mosaic';
+      $('#blurBox').hidden = S.mode !== 'blur';
+      $('#colorBox').hidden = S.mode !== 'fill';
+    });
+  });
+
+  pxR.addEventListener('input', function () { pxV.textContent = pxR.value; });
+  blurR.addEventListener('input', function () { blurV.textContent = blurR.value; });
+  pxR.addEventListener('change', function () { pxR.blur(); });
+  blurR.addEventListener('change', function () { blurR.blur(); });
+
+  btnUndo.addEventListener('click', function () {
+    var it = cur();
+    if (!it || !it.ops.length) return;
+    it.ops.pop();
+    render();
+    setStatus(it, it.ops.length ? 'done' : 'todo');
+    updateHeader();
+  });
+
+  btnReset.addEventListener('click', function () {
+    var it = cur();
+    if (!it) return;
+    it.ops = [];
+    render();
+    setStatus(it, 'todo');
+    updateHeader();
+  });
+
+  btnLast.addEventListener('click', function () {
+    var it = cur();
+    if (!it || !S.lastOp) return;
+    var o = S.lastOp;
+    var x = Math.max(0, Math.min(o.x, it.w - 1));
+    var y = Math.max(0, Math.min(o.y, it.h - 1));
+    var w = Math.min(o.w, it.w - x);
+    var h = Math.min(o.h, it.h - y);
+    var op = { x: x, y: y, w: w, h: h, mode: o.mode, size: o.size, color: o.color };
+    it.ops.push(op);
+    paint(bx, it, op);
+    setStatus(it, 'done');
+    updateHeader();
+    toast('已套用上次选区');
+  });
+
+  function gotoNext() {
+    if (S.cur < 0) return;
+    if (S.cur >= S.items.length - 1) { toast('已经是最后一张了'); return; }
+    var it = cur();
+    if (it && it.ops.length && it.status !== 'saved' && !it.warned) {
+      it.warned = true;
+      toast('这张改过还没保存（黄点），按 ← 回来再 Enter');
+    }
+    openItem(S.cur + 1);
+  }
+
+  function gotoPrev() {
+    if (S.cur <= 0) { if (S.items.length) toast('已经是第一张了'); return; }
+    openItem(S.cur - 1);
+  }
+
+  btnPrev.addEventListener('click', gotoPrev);
+  btnNext.addEventListener('click', gotoNext);
+
+  /* ================= 载入来源 ================= */
+  function addItems(list) {
+    list.forEach(function (x) {
+      S.items.push({
+        name: x.name,
+        handle: x.handle || null,
+        file: x.file || null,
+        type: x.type || '',
+        src: null, w: 0, h: 0,
+        ops: [],
+        status: 'todo',
+        thumbUrl: null
+      });
+    });
+    renderQueue();
+    updateHeader();
+    if (S.cur < 0 && S.items.length) openItem(0);
+  }
+
+  $('#pickDir').addEventListener('click', async function () {
+    if (!window.showDirectoryPicker) {
+      showBanner('这个浏览器看不到「选择文件夹」接口。用 Chrome / Edge 打开本页，或点「选择图片」（结果会下载，不覆盖原图）。');
+      return;
+    }
+    try {
+      var dir = await window.showDirectoryPicker({ id: 'maskdir', mode: 'readwrite' });
+      var list = [];
+      for await (var entry of dir.values()) {
+        if (entry.kind === 'file' && IMG_RE.test(entry.name)) list.push(entry);
+      }
+      list.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
+      if (!list.length) { toast('这个文件夹里没找到图片'); return; }
+      S.items = [];
+      S.cur = -1;
+      S.lastOp = null;
+      addItems(list.map(function (f) { return { name: f.name, handle: f }; }));
+      hideBanner();
+      toast('已载入 ' + list.length + ' 张，保存会直接覆盖原文件');
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      toast('打不开文件夹：' + (e && e.message ? e.message : e));
+    }
+  });
+
+  $('#pickFiles').addEventListener('click', async function () {
+    if (window.showOpenFilePicker) {
+      try {
+        var hs = await window.showOpenFilePicker({
+          multiple: true,
+          types: [{ description: '图片', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.avif'] } }]
+        });
+        S.items = [];
+        S.cur = -1;
+        S.lastOp = null;
+        addItems(hs.map(function (h) { return { name: h.name, handle: h }; }));
+        hideBanner();
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+      }
+    }
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = true;
+    input.onchange = function () {
+      var fs = Array.prototype.slice.call(input.files || []);
+      if (!fs.length) return;
+      S.items = []; S.cur = -1; S.lastOp = null;
+      addItems(fs.map(function (f) { return { name: f.name, file: f, type: f.type }; }));
+      showBanner('当前入口拿不到文件句柄，打码后只能下载（同名文件在下载目录），不会覆盖原图。要直接覆盖原图请用「选择文件夹」。');
+    };
+    input.click();
+  });
+
+  /* ================= 拖放 / 粘贴 ================= */
+  ['dragenter', 'dragover'].forEach(function (t) {
+    document.addEventListener(t, function (e) { e.preventDefault(); });
+  });
+  document.addEventListener('drop', async function (e) {
+    e.preventDefault();
+    var dt = e.dataTransfer;
+    if (!dt) return;
+    var list = [];
+    for (var i = 0; i < dt.items.length; i++) {
+      var item = dt.items[i];
+      if (item.kind !== 'file') continue;
+      var f = item.getAsFile();
+      if (!f) continue;
+      var h = null;
+      if (item.getAsFileSystemHandle) {
+        try { h = await item.getAsFileSystemHandle(); } catch (err) { h = null; }
+      }
+      list.push({ name: f.name, file: f, handle: (h && h.kind === 'file') ? h : null, type: f.type });
+    }
+    list = list.filter(function (x) { return /^image\//.test(x.type || '') || IMG_RE.test(x.name); });
+    if (!list.length) return;
+    if (S.items.length) {
+      list.forEach(function (x) { S.items.push({ name: x.name, handle: x.handle, file: x.file, type: x.type, src: null, w: 0, h: 0, ops: [], status: 'todo', thumbUrl: null }); });
+      renderQueue(); updateHeader();
+      toast('追加 ' + list.length + ' 张');
+    } else {
+      addItems(list);
+    }
+  });
+
+  document.addEventListener('paste', function (e) {
+    var items = (e.clipboardData && e.clipboardData.items) || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf('image/') === 0) {
+        var f = items[i].getAsFile();
+        if (!f) continue;
+        if (S.items.length === 0) addItems([{ name: 'clipboard-' + Date.now() + '.png', file: f, type: f.type }]);
+        else {
+          S.items.push({ name: 'clipboard-' + Date.now() + '.png', handle: null, file: f, type: f.type, src: null, w: 0, h: 0, ops: [], status: 'todo', thumbUrl: null });
+          renderQueue(); updateHeader();
+        }
+        return;
+      }
+    }
+  });
+
+  /* ================= 快捷键 ================= */
+  document.addEventListener('keydown', function (e) {
+    var tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    var ctrl = e.ctrlKey || e.metaKey;
+
+    if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); btnUndo.click(); return; }
+    if (ctrl && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); btnSaveAll.click(); return; }
+    if (ctrl && e.key.toLowerCase() === 's') { e.preventDefault(); saveAndNext(); return; }
+
+    if (e.key === 'Enter') { e.preventDefault(); saveAndNext(); return; }
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ' || e.code === 'Space') {
+      e.preventDefault(); gotoNext(); return;
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); gotoPrev(); return; }
+    if (e.key === 'Escape') {
+      if (S.drag) { S.drag = null; ox.clearRect(0, 0, over.width, over.height); }
+      return;
+    }
+    var k = e.key.toLowerCase();
+    if (k === 'd') { e.preventDefault(); btnLast.click(); return; }
+    if (k === 'r') { e.preventDefault(); btnReset.click(); return; }
+    if (k === 'n') { e.preventDefault(); gotoNext(); return; }
+    if (k === 'p') { e.preventDefault(); gotoPrev(); return; }
+  });
+
+  /* ================= 环境提示 ================= */
+  function showBanner(html) {
+    var b = $('#banner');
+    b.innerHTML = html;
+    b.hidden = false;
+  }
+  function hideBanner() { $('#banner').hidden = true; }
+
+  if (location.protocol === 'file:') {
+    showBanner('当前是本地文件（file://）方式打开。<b>浏览器通常不允许网页直接改写磁盘文件</b>，点「选择文件夹」会失败或只能下载副本。要真正覆盖原图，用 <b>本地启动.bat</b> 启动的 http://127.0.0.1:8788 地址打开本页。');
+  }
+  if (!('showDirectoryPicker' in window)) {
+    showBanner('这个浏览器不支持目录写入（需要 Chrome / Edge 86+）。仍可使用「选择图片」+ 下载模式。');
+  }
+
+  updateHeader();
+})();
+</script>
+</body>
+</html>
