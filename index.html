@@ -341,16 +341,54 @@
 
   async function openItem(i) {
     if (i < 0 || i >= S.items.length) return;
+    var my = ++openSeq;
     S.cur = i;
     var it = S.items[i];
     empty.hidden = true;
     wrap.hidden = false;
-    if (!it.src) {
-      try { await loadSrc(it); } catch (e) { toast('读取失败: ' + it.name); return; }
-    }
-    render();
     markActive();
+    if (!it.src) {
+      try { await loadSrc(it); } catch (e) { if (my === openSeq) toast('读取失败: ' + it.name); return; }
+      if (my !== openSeq) return;
+    }
+    if (my !== openSeq) return;
+    touchSrc(i);
+    render();
     updateHeader();
+  }
+
+  /* 解码后的位图很占内存（4K 一张约 40MB），只留最近几张，其余关掉 */
+  var SRC_KEEP = 3;
+  var srcOrder = [];
+  var openSeq = 0;
+
+  function touchSrc(i) {
+    var k = srcOrder.indexOf(i);
+    if (k >= 0) srcOrder.splice(k, 1);
+    srcOrder.push(i);
+    var guard = 0;
+    while (srcOrder.length > SRC_KEEP && guard++ < 20) {
+      var old = srcOrder[0];
+      var oit = S.items[old];
+      if (old === S.cur || !oit || !oit.src) { srcOrder.shift(); continue; }
+      try { if (oit.src.close) oit.src.close(); } catch (e) {}
+      oit.src = null; oit.w = 0; oit.h = 0;
+      srcOrder.shift();
+    }
+  }
+
+  /* 保存成功后，把内存里的原图换成"已打码结果"，并清空操作序列：
+     这样它再被移出缓存、重新从磁盘读回来时，不会把同样的操作应用第二遍 */
+  async function commitSrc(item, blob) {
+    try {
+      var bmp = await createImageBitmap(blob);
+      if (item.src && item.src.close) { try { item.src.close(); } catch (e) {} }
+      item.src = bmp;
+      item.w = bmp.width;
+      item.h = bmp.height;
+      item.ops = [];
+      if (S.cur === S.items.indexOf(item)) render();
+    } catch (e) {}
   }
 
   /* ================= 交互 ================= */
@@ -382,7 +420,7 @@
   over.addEventListener('pointerdown', function (e) {
     if (!cur() || !cur().src) return;
     e.preventDefault();
-    if (over.setPointerCapture) over.setPointerCapture(e.pointerId);
+    if (over.setPointerCapture) { try { over.setPointerCapture(e.pointerId); } catch (err) {} }
     var p = toCanvas(e);
     S.drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
     drawSel();
@@ -462,8 +500,11 @@
   async function saveItem(item, opts) {
     opts = opts || {};
     if (!item.ops.length) return false;
+    if (!item.src) {
+      try { await loadSrc(item); } catch (e) { toast('读不到原图: ' + item.name); return false; }
+    }
     var blob = await toBlobOf(item);
-    if (!blob) return false;
+    if (!blob) { toast('编码失败：' + item.name); return false; }
     if (item.handle && item.handle.createWritable) {
       try {
         var perm = item.handle.queryPermission ? await item.handle.queryPermission({ mode: 'readwrite' }) : 'granted';
@@ -474,6 +515,7 @@
         var w = await item.handle.createWritable();
         await w.write(blob);
         await w.close();
+        await commitSrc(item, blob);
         setStatus(item, 'saved');
         if (!opts.silent) toast('已覆盖原文件：' + item.name);
         return true;
@@ -507,6 +549,8 @@
       var n = nextTodo(S.cur);
       if (n >= 0) await openItem(n);
       else toast('全部处理完了 🎉');
+    } catch (err) {
+      toast('保存失败：' + (err && err.message ? err.message : err));
     } finally {
       S.busy = false;
       updateHeader();
@@ -599,6 +643,19 @@
   btnNext.addEventListener('click', gotoNext);
 
   /* ================= 载入来源 ================= */
+  function resetAll() {
+    S.items.forEach(function (it) {
+      if (it.src && it.src.close) { try { it.src.close(); } catch (e) {} }
+      if (it.thumbUrl) { try { URL.revokeObjectURL(it.thumbUrl); } catch (e) {} }
+    });
+    S.items = [];
+    S.cur = -1;
+    S.lastOp = null;
+    srcOrder.length = 0;
+    openSeq++;
+    renderQueue();
+  }
+
   function addItems(list) {
     list.forEach(function (x) {
       S.items.push({
@@ -630,9 +687,7 @@
       }
       list.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
       if (!list.length) { toast('这个文件夹里没找到图片'); return; }
-      S.items = [];
-      S.cur = -1;
-      S.lastOp = null;
+      resetAll();
       addItems(list.map(function (f) { return { name: f.name, handle: f }; }));
       hideBanner();
       toast('已载入 ' + list.length + ' 张，保存会直接覆盖原文件');
@@ -649,9 +704,7 @@
           multiple: true,
           types: [{ description: '图片', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.avif'] } }]
         });
-        S.items = [];
-        S.cur = -1;
-        S.lastOp = null;
+        resetAll();
         addItems(hs.map(function (h) { return { name: h.name, handle: h }; }));
         hideBanner();
         return;
@@ -666,7 +719,7 @@
     input.onchange = function () {
       var fs = Array.prototype.slice.call(input.files || []);
       if (!fs.length) return;
-      S.items = []; S.cur = -1; S.lastOp = null;
+      resetAll();
       addItems(fs.map(function (f) { return { name: f.name, file: f, type: f.type }; }));
       showBanner('当前入口拿不到文件句柄，打码后只能下载（同名文件在下载目录），不会覆盖原图。要直接覆盖原图请用「选择文件夹」。');
     };
