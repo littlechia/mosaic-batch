@@ -1,5 +1,7 @@
 _check.js
 _ext.cjs
+发布.ps1
+发布到GitHub.bat
 *.log
 Thumbs.db
 desktop.ini
